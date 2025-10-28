@@ -10,7 +10,7 @@ We use the [Whisper](https://github.com/openai/whisper) speech recognition syste
 
 **Copyright:** OpenAI
 
-```
+```text
 MIT License
 
 Copyright (c) 2022 OpenAI
@@ -24,7 +24,7 @@ We use the [pyannote.audio](https://github.com/pyannote/pyannote-audio) library 
 
 **Copyright:** Hervé Bredin
 
-```
+```text
 MIT License
 
 Copyright (c) 2018-present Hervé Bredin
@@ -36,7 +36,7 @@ We use the pre-trained speaker diarization model from pyannote.
 
 **License:** MIT License
 
-**Model:** https://huggingface.co/pyannote/speaker-diarization-3.1
+**Model:** [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
 
 **Copyright:** Hervé Bredin
 
@@ -46,7 +46,7 @@ We use the pre-trained segmentation model from pyannote.
 
 **License:** MIT License
 
-**Model:** https://huggingface.co/pyannote/segmentation-3.0
+**Model:** [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
 
 **Copyright:** Hervé Bredin
 
@@ -73,4 +73,3 @@ When using this project commercially, you must:
 2. Include this ATTRIBUTION.md file
 3. Acknowledge OpenAI (Whisper) and pyannote.audio in your documentation
 4. Comply with Bilibili's terms of service when downloading content
-

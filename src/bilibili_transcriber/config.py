@@ -19,6 +19,15 @@ for directory in [VIDEO_DIR, AUDIO_DIR, OUTPUT_DIR]:
 WHISPER_MODEL = "large"  # Options: tiny, base, small, medium, large (large for best accuracy)
 WHISPER_LANGUAGE = "zh"  # Chinese by default, can be set to None for auto-detection
 
+# Whisper transcription settings
+# Use a simple initial_prompt to guide Whisper's punctuation output
+# This is a minimal prompt with actual punctuation that helps Whisper learn the pattern
+WHISPER_INITIAL_PROMPTS = {
+    "zh": "大家好。这是一个测试。",
+    "en": "Hello. This is a test.",
+    "ja": "こんにちは。テストです。"
+}
+
 # Audio processing settings
 AUDIO_SAMPLE_RATE = 16000  # 16kHz for optimal processing
 AUDIO_CHANNELS = 1  # Mono audio

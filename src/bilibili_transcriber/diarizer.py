@@ -45,7 +45,7 @@ try:
     if torchaudio is not None and not hasattr(torchaudio, 'info'):
         def _torchaudio_info(uri, backend=None):  # type: ignore  # pylint: disable=unused-argument
             """Workaround for missing torchaudio.info in nightly builds"""
-            import soundfile as sf
+            import soundfile as sf  # pylint: disable=import-outside-toplevel
             info = sf.info(uri)
 
             # Use AudioMetaData class already defined above for consistency

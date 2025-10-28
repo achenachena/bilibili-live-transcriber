@@ -5,6 +5,8 @@ Uses functional programming approach.
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from .config import WHISPER_INITIAL_PROMPTS
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,12 +51,20 @@ def transcribe_audio(audio_path: str, model_size: str = "base",
     logger.info("Transcribing audio: %s", audio_path)
 
     try:
-        result = model.transcribe(
-            audio_path,
-            language=language,
-            verbose=verbose,
-            word_timestamps=False  # Use segment-level timestamps
-        )
+        # Use minimal initial prompt to guide punctuation without hallucinations
+        initial_prompt = WHISPER_INITIAL_PROMPTS.get(language)
+
+        transcribe_params = {
+            "language": language,
+            "verbose": verbose,
+            "word_timestamps": False  # Use segment-level timestamps
+        }
+
+        # Only add prompt if we have one for this language
+        if initial_prompt:
+            transcribe_params["initial_prompt"] = initial_prompt
+
+        result = model.transcribe(audio_path, **transcribe_params)
 
         logger.info("Transcription complete: %d segments",
                     len(result['segments']))
