@@ -14,19 +14,6 @@ logger = logging.getLogger(__name__)
 def download_video(url: str, output_dir: str = "videos") -> str:
     """
     Download a video from the given Bilibili URL.
-
-    Uses RORO pattern: Receive an Object, Return an Object
-
-    Args:
-        url: Bilibili video URL
-        output_dir: Directory to save the video
-
-    Returns:
-        Path to the downloaded video file
-
-    Raises:
-        FileNotFoundError: If downloaded file cannot be found
-        Exception: If download fails
     """
     if not url:
         raise ValueError("URL cannot be empty")
@@ -48,21 +35,64 @@ def download_video(url: str, output_dir: str = "videos") -> str:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            logger.info("Downloaded: %s", filename)
 
-            # Ensure file exists
-            if not os.path.exists(filename):
-                filename = _find_downloaded_file(filename)
-                if not filename:
+            # Handle playlist downloads
+            if isinstance(info, dict) and info.get('_type') == 'playlist':
+                logger.info(
+                    "Downloaded playlist with %d entries", len(
+                        info.get(
+                            'entries', [])))
+
+                # For playlists, find the most recently downloaded file
+                # by checking the directory for new files
+                downloaded_files = _get_recent_files(output_dir)
+
+                if downloaded_files:
+                    # Return the first video file
+                    filename = downloaded_files[0]
+                    logger.info("Using first playlist entry: %s", filename)
+                    return filename
+                else:
                     raise FileNotFoundError(
-                        f"Downloaded file not found: {filename}")
+                        "No files downloaded from playlist")
+            else:
+                # Single video download
+                filename = ydl.prepare_filename(info)
+                logger.info("Downloaded: %s", filename)
 
-            return filename
+                # Ensure file exists
+                if not os.path.exists(filename):
+                    filename = _find_downloaded_file(filename)
+                    if not filename:
+                        raise FileNotFoundError(
+                            f"Downloaded file not found: {filename}")
+
+                return filename
 
     except Exception as e:
         logger.error("Download failed: %s", str(e), exc_info=True)
         raise
+
+
+def _get_recent_files(directory: str) -> list[str]:
+    """
+    Get the most recently downloaded files from a directory.
+
+    Internal helper for playlist handling.
+    """
+    if not os.path.exists(directory):
+        return []
+
+    files = []
+    for filename in os.listdir(directory):
+        filepath = os.path.join(directory, filename)
+        if os.path.isfile(filepath) and filename.endswith(
+                ('.mp4', '.mkv', '.webm', '.flv')):
+            files.append((os.path.getmtime(filepath), filepath))
+
+    # Sort by modification time, newest first
+    files.sort(reverse=True)
+    return [filepath for _mtime, filepath in files]
 
 
 def _find_downloaded_file(filename: str) -> Optional[str]:
@@ -70,12 +100,6 @@ def _find_downloaded_file(filename: str) -> Optional[str]:
     Find the actual downloaded file by trying different extensions.
 
     Internal helper function.
-
-    Args:
-        filename: Base filename without extension
-
-    Returns:
-        Full path to found file, or None
     """
     base_name = os.path.splitext(filename)[0]
     for ext in ['.mp4', '.mkv', '.webm', '.flv']:
@@ -88,15 +112,6 @@ def _find_downloaded_file(filename: str) -> Optional[str]:
 def get_video_info(url: str) -> Dict[str, Any]:
     """
     Get video information without downloading.
-
-    Args:
-        url: Bilibili video URL
-
-    Returns:
-        Video info dictionary
-
-    Raises:
-        Exception: If unable to extract video info
     """
     if not url:
         raise ValueError("URL cannot be empty")

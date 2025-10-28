@@ -8,7 +8,7 @@ A Python tool to transcribe Bilibili live recordings with speaker diarization (s
 - Extract audio from video files
 - Identify different speakers in the recording
 - Transcribe speech to text using OpenAI Whisper
-- Output formatted transcripts with timestamps and speaker labels
+- Output formatted transcripts with timestamps and speaker labels in Markdown format
 
 ## Requirements
 
@@ -113,6 +113,39 @@ bilibili-transcribe <bilibili_url>
 python -m bilibili_transcriber.main --file path/to/video.mp4
 ```
 
+### Batch processing multiple videos
+
+Create a text file with URLs (one per line):
+
+```bash
+# Create a batch file
+cat > urls.txt << EOF
+https://www.bilibili.com/video/BV1234567890
+https://www.bilibili.com/video/BV0987654321
+https://www.bilibili.com/video/BV1122334455
+EOF
+
+# Process all URLs in batch
+python -m bilibili_transcriber.main --batch urls.txt
+
+# Batch process with custom model
+python -m bilibili_transcriber.main --batch urls.txt --model large
+```
+
+### Batch processing local files
+
+```bash
+# Create a batch file with local file paths
+cat > files.txt << EOF
+/path/to/video1.mp4
+/path/to/video2.mkv
+/path/to/audio1.wav
+EOF
+
+# Process all files in batch
+python -m bilibili_transcriber.main --batch files.txt --file
+```
+
 ### Advanced options
 
 ```bash
@@ -125,18 +158,23 @@ python -m bilibili_transcriber.main <bilibili_url> \
 ### Options
 
 - `--file`: Process a local file instead of downloading from URL
+- `--batch`: Process multiple URLs/files from a text file (one per line)
 - `--output-dir`: Directory to save output (default: ./output)
 - `--model`: Whisper model size (tiny, base, small, medium, large)
 - `--whisper-language`: Language code for Whisper (e.g., zh, ja, en)
 
 ## Output Format
 
-The output will be a text file with formatted timestamps and speaker labels:
+The output will be a Markdown file with formatted timestamps and speaker labels:
 
-```text
-[00:00:05] Speaker A: 大家好，欢迎来到直播间
-[00:00:12] Speaker B: 谢谢大家来观看
-[00:00:18] Speaker A: 今天我们要聊什么呢？
+```markdown
+# Transcription
+
+**[00:00:05] SPEAKER_00:** 大家好，欢迎来到直播间
+
+**[00:00:12] SPEAKER_01:** 谢谢大家来观看
+
+**[00:00:18] SPEAKER_00:** 今天我们要聊什么呢？
 ```
 
 ## Performance Notes
@@ -145,6 +183,8 @@ The output will be a text file with formatted timestamps and speaker labels:
 - **Processing speed**: ~10-30x real-time on CPU, much faster on GPU
 - **Accuracy**: Speaker diarization works best with clear audio and distinct voices
 - **Recommended**: Use at least `base` model for Chinese VTubers
+- **Auto-cleanup**: Downloaded videos and temporary audio files are automatically deleted after processing
+- **Batch processing**: Process multiple videos efficiently with progress tracking and error recovery
 
 ## Configuration
 
@@ -179,6 +219,13 @@ Edit `config.py` to customize settings:
 
 - Use a smaller Whisper model (tiny, base) for faster transcription
 - GPU acceleration will significantly speed up processing
+
+### Repetitive output issue
+
+- **Problem**: Whisper sometimes generates repetitive text like "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目" even when audio content is not repetitive
+- **Solution**: This project includes automatic filtering to remove repetitive segments
+- **Reference**: This is a known Whisper issue documented in [GitHub discussions #2015](https://github.com/openai/whisper/discussions/2015) and [#1962](https://github.com/openai/whisper/discussions/1962)
+- **Technical details**: The project uses `condition_on_previous_text=False` and other anti-hallucination parameters to minimize this issue
 
 ### Python 3.14 Compatibility
 

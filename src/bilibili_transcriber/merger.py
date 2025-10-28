@@ -5,26 +5,17 @@ Uses functional programming approach.
 import logging
 from typing import List, Optional, Tuple
 
+from .config import MIN_SPEAKER_DURATION, MIN_SILENCE_DURATION, MIN_OVERLAP_RATIO
+
 logger = logging.getLogger(__name__)
 
 
 def merge_results(diarization_segments: List[Tuple[float, float, str]],
                   transcription_segments: List[Tuple[float, float, str]],
-                  min_speaker_duration: float = 0.5,
-                  min_silence_duration: float = 0.5) -> List[Tuple[float, float, str, str]]:
+                  min_speaker_duration: float = MIN_SPEAKER_DURATION,
+                  min_silence_duration: float = MIN_SILENCE_DURATION) -> List[Tuple[float, float, str, str]]:
     """
     Merge diarization and transcription segments.
-
-    Uses RORO pattern: Receive an Object, Return an Object
-
-    Args:
-        diarization_segments: List of (start, end, speaker) tuples
-        transcription_segments: List of (start, end, text) tuples
-        min_speaker_duration: Minimum duration for a speaker segment (seconds)
-        min_silence_duration: Minimum silence duration to split segments (seconds)
-
-    Returns:
-        List of (start, end, speaker, text) tuples
     """
     if not diarization_segments:
         logger.warning("No diarization segments provided")
@@ -59,14 +50,6 @@ def _find_speaker_for_time(diarization_segments: List[Tuple[float, float, str]],
     Find which speaker is active during a given time range.
 
     Internal helper function.
-
-    Args:
-        diarization_segments: List of (start, end, speaker) tuples
-        start_time: Start time of the segment
-        end_time: End time of the segment
-
-    Returns:
-        Speaker label or None
     """
     overlaps = []
 
@@ -77,7 +60,8 @@ def _find_speaker_for_time(diarization_segments: List[Tuple[float, float, str]],
         if overlap_start < overlap_end:
             overlap_duration = overlap_end - overlap_start
             segment_duration = end_time - start_time
-            overlap_ratio = overlap_duration / segment_duration if segment_duration > 0 else 0
+            overlap_ratio = overlap_duration / \
+                segment_duration if segment_duration > MIN_OVERLAP_RATIO else MIN_OVERLAP_RATIO
 
             overlaps.append((overlap_ratio, speaker))
 
@@ -95,14 +79,6 @@ def _group_consecutive_segments(segments: List[Tuple[float, float, str, str]],
     Group consecutive segments from the same speaker.
 
     Internal helper function.
-
-    Args:
-        segments: List of (start, end, speaker, text) tuples
-        min_speaker_duration: Minimum duration for a speaker segment
-        min_silence_duration: Minimum silence duration to split segments
-
-    Returns:
-        Grouped segments
     """
     if not segments:
         return segments

@@ -7,18 +7,14 @@ import os
 from datetime import timedelta
 from typing import List, Tuple
 
+from .config import SECONDS_PER_HOUR, SECONDS_PER_MINUTE
+
 logger = logging.getLogger(__name__)
 
 
 def convert_to_simplified(text: str) -> str:
     """
     Convert traditional Chinese to simplified Chinese.
-
-    Args:
-        text: Text in traditional Chinese
-
-    Returns:
-        Text in simplified Chinese
     """
     try:
         import opencc  # pylint: disable=import-outside-toplevel
@@ -33,34 +29,23 @@ def convert_to_simplified(text: str) -> str:
 def format_time(seconds: float) -> str:
     """
     Format time in seconds to [HH:MM:SS] format.
-
-    Args:
-        seconds: Time in seconds
-
-    Returns:
-        Formatted time string
     """
     td = timedelta(seconds=float(seconds))
-    hours, remainder = divmod(td.seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
+    hours, remainder = divmod(td.seconds, SECONDS_PER_HOUR)
+    minutes, secs = divmod(remainder, SECONDS_PER_MINUTE)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def format_segments(segments: List[Tuple[float, float, str, str]]) -> str:
     """
-    Format merged segments into readable text.
-
-    Args:
-        segments: List of (start, end, speaker, text) tuples
-
-    Returns:
-        Formatted text string
+    Format merged segments into readable Markdown text.
     """
-    lines = []
+    lines = ["# Transcription", ""]
 
     for start, _end, speaker, text in segments:
         time_str = format_time(start)
-        lines.append(f"[{time_str}] {speaker}: {text}")
+        lines.append(f"**[{time_str}] {speaker}:** {text}")
+        lines.append("")  # Add blank line for readability
 
     return "\n".join(lines)
 
@@ -69,19 +54,6 @@ def save_transcription(segments: List[Tuple[float, float, str, str]],
                        output_filename: str, output_dir: str = "output") -> str:
     """
     Save formatted segments to a file.
-
-    Uses RORO pattern: Receive an Object, Return an Object
-
-    Args:
-        segments: List of (start, end, speaker, text) tuples
-        output_filename: Output filename
-        output_dir: Output directory
-
-    Returns:
-        Path to saved file
-
-    Raises:
-        OSError: If file cannot be written
     """
     if not output_dir:
         raise ValueError("Output directory cannot be empty")
@@ -110,16 +82,9 @@ def save_transcription(segments: List[Tuple[float, float, str, str]],
         raise
 
 
-def generate_filename(source_name: str, extension: str = ".txt") -> str:
+def generate_filename(source_name: str, extension: str = ".md") -> str:
     """
     Generate an output filename based on source.
-
-    Args:
-        source_name: Source file or URL name
-        extension: Output file extension
-
-    Returns:
-        Output filename
     """
     if not source_name:
         return f"transcript{extension}"

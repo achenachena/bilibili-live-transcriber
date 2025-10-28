@@ -4,8 +4,17 @@ Uses functional programming approach.
 """
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from .config import DIARIZATION_MODEL, AUDIO_BITS_PER_SAMPLE
+
+# Suppress TorchCodec backend warnings
+warnings.filterwarnings(
+    "ignore",
+    message="The 'backend' parameter is not used by TorchCodec AudioDecoder"
+)
 
 # Load environment variables from .env file
 try:
@@ -15,7 +24,8 @@ try:
 except ImportError:
     pass
 
-# Set soundfile as the default backend for torchaudio to avoid torchcodec issues
+# Set soundfile as the default backend for torchaudio to avoid torchcodec
+# issues
 os.environ["TORCHAUDIO_BACKEND"] = "soundfile"
 
 # Workaround for torchaudio API changes in torchaudio 2.9.0 with Python 3.14
@@ -37,13 +47,14 @@ try:
             num_frames: int
             num_channels: int
             sample_rate: int
-            bits_per_sample: int = 16
+            bits_per_sample: int = AUDIO_BITS_PER_SAMPLE
 
         torchaudio.AudioMetaData = AudioMetaData
 
     # Workaround 3: info() method (removed in nightly builds)
     if torchaudio is not None and not hasattr(torchaudio, 'info'):
-        def _torchaudio_info(uri, backend=None):  # type: ignore  # pylint: disable=unused-argument
+        # type: ignore  # pylint: disable=unused-argument
+        def _torchaudio_info(uri, backend=None):
             """Workaround for missing torchaudio.info in nightly builds"""
             import soundfile as sf  # pylint: disable=import-outside-toplevel
             info = sf.info(uri)
@@ -59,7 +70,8 @@ try:
 except ImportError:
     torchaudio = None  # type: ignore
 
-# Import heavy ML libraries at top level to avoid "import-outside-toplevel" warnings
+# Import heavy ML libraries at top level to avoid
+# "import-outside-toplevel" warnings
 try:
     from pyannote.audio import Pipeline  # noqa
     import torch  # noqa
@@ -70,26 +82,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def diarize_audio(audio_path: str, model_name: str = "pyannote/speaker-diarization-3.1",
+def diarize_audio(audio_path: str, model_name: str = DIARIZATION_MODEL,
                   min_speakers: Optional[int] = None,
                   max_speakers: Optional[int] = None) -> List[Tuple[float, float, str]]:
     """
     Perform speaker diarization on an audio file.
-
-    Uses RORO pattern: Receive an Object, Return an Object
-
-    Args:
-        audio_path: Path to audio file
-        model_name: Diarization model name
-        min_speakers: Minimum number of speakers (optional)
-        max_speakers: Maximum number of speakers (optional)
-
-    Returns:
-        List of tuples (start_time, end_time, speaker_label)
-
-    Raises:
-        ImportError: If pyannote.audio not available
-        Exception: If diarization fails
     """
     if not audio_path:
         raise ValueError("Audio path cannot be empty")
@@ -108,7 +105,7 @@ def diarize_audio(audio_path: str, model_name: str = "pyannote/speaker-diarizati
         diarization = pipeline(
             audio_path,
             min_speakers=min_speakers,
-        max_speakers=max_speakers
+            max_speakers=max_speakers
         )
 
         segments = []
@@ -152,7 +149,10 @@ def _initialize_pipeline(model_name: str):  # type: ignore
             'HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
 
         if hf_token:
-            pipeline = Pipeline.from_pretrained(model_name, use_auth_token=hf_token)  # pylint: disable=unexpected-keyword-arg
+            pipeline = Pipeline.from_pretrained(
+                model_name,
+                use_auth_token=hf_token
+            )  # pylint: disable=unexpected-keyword-arg
         else:
             try:
                 pipeline = Pipeline.from_pretrained(model_name)
@@ -173,5 +173,8 @@ def _initialize_pipeline(model_name: str):  # type: ignore
         return pipeline
 
     except Exception as e:
-        logger.error("Failed to initialize pipeline: %s", str(e), exc_info=True)
+        logger.error(
+            "Failed to initialize pipeline: %s",
+            str(e),
+            exc_info=True)
         raise
