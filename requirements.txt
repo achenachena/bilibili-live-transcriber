@@ -1,0 +1,20 @@
+# Core dependencies
+yt-dlp>=2023.12.30
+openai-whisper>=20231117
+pyannote.audio>=3.1.1
+torch>=2.0.0
+torchaudio>=2.0.0
+huggingface-hub>=0.28,<1.0.0
+
+# Audio processing
+ffmpeg-python>=0.2.0
+
+# Utilities
+tqdm>=4.66.1
+click>=8.1.7
+python-dotenv>=1.0.0
+opencc-python-reimplemented>=0.1.7
+
+# Note: For Python 3.14+, you may need to install numba separately:
+# pip install numba>=0.63.0b1  # Beta version with Python 3.14 support
+
