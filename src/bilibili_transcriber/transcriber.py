@@ -16,7 +16,8 @@ from .config import (
     WHISPER_WORD_TIMESTAMPS,
     REPETITIVE_SEGMENT_THRESHOLD,
     MIN_SEGMENT_LENGTH,
-    MAX_TEXT_PREVIEW_LENGTH
+    MAX_TEXT_PREVIEW_LENGTH,
+    get_cached_whisper_model
 )
 
 logger = logging.getLogger(__name__)
@@ -34,19 +35,15 @@ def transcribe_audio(audio_path: str, model_size: str = "base",
     if not audio_path:
         raise ValueError("Audio path cannot be empty")
 
-    try:
-        import whisper  # pylint: disable=import-outside-toplevel
-    except ImportError as e:
-        logger.error("Whisper module not available: %s", str(e))
-        raise
+    # Whisper import is handled in get_cached_whisper_model
 
-    logger.info("Loading Whisper model: %s", model_size)
+    logger.info("Getting cached Whisper model: %s", model_size)
 
     try:
-        model = whisper.load_model(model_size)
-        logger.info("Whisper model loaded successfully")
+        model = get_cached_whisper_model(model_size)
+        logger.info("Whisper model retrieved from cache successfully")
     except Exception as e:
-        logger.error("Failed to load Whisper model: %s", str(e), exc_info=True)
+        logger.error("Failed to get Whisper model: %s", str(e), exc_info=True)
         raise
 
     logger.info("Transcribing audio: %s", audio_path)

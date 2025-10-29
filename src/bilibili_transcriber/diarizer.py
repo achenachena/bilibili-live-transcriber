@@ -8,7 +8,7 @@ import warnings
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .config import DIARIZATION_MODEL, AUDIO_BITS_PER_SAMPLE
+from .config import DIARIZATION_MODEL, AUDIO_BITS_PER_SAMPLE, get_cached_diarization_pipeline
 
 # Suppress TorchCodec backend warnings
 warnings.filterwarnings(
@@ -74,15 +74,13 @@ except ImportError:
 # "import-outside-toplevel" warnings
 try:
     from pyannote.audio import Pipeline  # noqa
-    import torch  # noqa
 except ImportError:
     Pipeline = None  # type: ignore
-    torch = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 
-def diarize_audio(audio_path: str, model_name: str = DIARIZATION_MODEL,
+def diarize_audio(audio_path: str, model_name: str = DIARIZATION_MODEL,  # pylint: disable=unused-argument
                   min_speakers: Optional[int] = None,
                   max_speakers: Optional[int] = None) -> List[Tuple[float, float, str]]:
     """
@@ -91,13 +89,21 @@ def diarize_audio(audio_path: str, model_name: str = DIARIZATION_MODEL,
     if not audio_path:
         raise ValueError("Audio path cannot be empty")
 
-    logger.info("Initializing speaker diarization pipeline...")
+    logger.info("Getting cached speaker diarization pipeline...")
 
     # Import check
     if Pipeline is None:
         raise ImportError("pyannote.audio not available")
 
-    pipeline = _initialize_pipeline(model_name)
+    try:
+        pipeline = get_cached_diarization_pipeline()
+        logger.info("Diarization pipeline retrieved from cache successfully")
+    except Exception as e:
+        logger.error(
+            "Failed to get diarization pipeline: %s",
+            str(e),
+            exc_info=True)
+        raise
 
     logger.info("Diarizing audio: %s", audio_path)
 
@@ -120,61 +126,4 @@ def diarize_audio(audio_path: str, model_name: str = DIARIZATION_MODEL,
 
     except Exception as e:
         logger.error("Diarization failed: %s", str(e), exc_info=True)
-        raise
-
-
-def _initialize_pipeline(model_name: str):  # type: ignore
-    """
-    Initialize the diarization pipeline.
-
-    Internal helper function.
-
-    Args:
-        model_name: Model name to use
-
-    Returns:
-        Initialized pipeline
-    """
-    # Check dependencies
-    if torch is None:
-        logger.error("torch not available")
-        raise ImportError("torch not available")
-    if Pipeline is None:
-        logger.error("pyannote.audio not available")
-        raise ImportError("pyannote.audio not available")
-
-    try:
-        # Get HuggingFace token from environment
-        hf_token = os.environ.get(
-            'HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
-
-        if hf_token:
-            pipeline = Pipeline.from_pretrained(
-                model_name,
-                use_auth_token=hf_token
-            )  # pylint: disable=unexpected-keyword-arg
-        else:
-            try:
-                pipeline = Pipeline.from_pretrained(model_name)
-            except Exception:
-                logger.error(
-                    "Authentication required. Please set HF_TOKEN environment variable.")
-                logger.error(
-                    "Visit https://huggingface.co/pyannote/speaker-diarization-3.1 "
-                    "to accept the model license.")
-                raise
-
-        # Move to GPU if available
-        if torch.cuda.is_available():
-            logger.info("Using GPU for speaker diarization")
-            pipeline = pipeline.to(torch.device("cuda"))
-
-        logger.info("Diarization pipeline initialized")
-        return pipeline
-
-    except Exception as e:
-        logger.error(
-            "Failed to initialize pipeline: %s",
-            str(e),
-            exc_info=True)
         raise

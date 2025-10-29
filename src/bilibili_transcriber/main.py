@@ -5,7 +5,10 @@ Uses functional programming approach.
 import logging
 import os
 import sys
-from typing import List, Optional
+from contextlib import contextmanager
+from typing import Generator, List, Optional
+import concurrent.futures
+import time
 
 import click
 
@@ -14,7 +17,8 @@ from . import (audio_processor, diarizer, downloader, formatter, merger,
 from .config import (AUDIO_DIR, OUTPUT_DIR, VIDEO_DIR, WHISPER_LANGUAGE,
                      WHISPER_MODEL, PIPELINE_STEPS, DEFAULT_SPLIT_THRESHOLD,
                      DEFAULT_SPLIT_THRESHOLD_CLI, DEFAULT_SEGMENT_DURATION,
-                     SUPPORTED_AUDIO_EXTENSIONS)
+                     SUPPORTED_AUDIO_EXTENSIONS, get_optimal_workers,
+                     should_use_parallel_processing, MAX_BATCH_WORKERS)
 
 # Setup logging
 logging.basicConfig(
@@ -22,6 +26,29 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def managed_file_cleanup(*file_paths: str) -> Generator[List[str], None, None]:
+    """
+    Context manager for guaranteed file cleanup.
+
+    Ensures all specified files are deleted when exiting the context,
+    regardless of success or failure.
+    """
+    try:
+        yield list(file_paths)
+    finally:
+        # Guaranteed cleanup - runs regardless of success/failure
+        for file_path in file_paths:
+            if file_path and os.path.exists(file_path):
+                try:
+                    logger.info("Deleting temporary file: %s", file_path)
+                    os.remove(file_path)
+                    logger.debug("File deleted successfully: %s", file_path)
+                except Exception as e:  # pylint: disable=broad-except
+                    logger.warning(
+                        "Failed to delete file %s: %s", file_path, e)
 
 
 def process_bilibili_url(url: str, output_name: Optional[str] = None,
@@ -35,57 +62,25 @@ def process_bilibili_url(url: str, output_name: Optional[str] = None,
 
     logger.info("Processing Bilibili URL: %s", url)
 
-    video_path = None
-    audio_path = None
+    # Step 1: Download video
+    logger.info(
+        "Step %d/5: Downloading video...",
+        PIPELINE_STEPS["DOWNLOAD"])
+    video_path = downloader.download_video(url, VIDEO_DIR)
 
-    try:
-        # Step 1: Download video
-        logger.info(
-            "Step %d/5: Downloading video...",
-            PIPELINE_STEPS["DOWNLOAD"])
-        video_path = downloader.download_video(url, VIDEO_DIR)
+    # Step 2: Extract audio
+    logger.info(
+        "Step %d/5: Extracting audio...",
+        PIPELINE_STEPS["EXTRACT"])
+    audio_path = audio_processor.extract_audio(
+        video_path, output_name, AUDIO_DIR)
 
-        # Step 2: Extract audio
-        logger.info(
-            "Step %d/5: Extracting audio...",
-            PIPELINE_STEPS["EXTRACT"])
-        audio_path = audio_processor.extract_audio(
-            video_path, output_name, AUDIO_DIR)
-
+    # Use context manager for guaranteed cleanup
+    with managed_file_cleanup(video_path, audio_path):
         # Step 3-5: Process audio
         output_path = process_audio_file(
             audio_path, output_name, whisper_model, whisper_language)
-
-        # Clean up temporary files
-        if video_path and os.path.exists(video_path):
-            logger.info("Deleting temporary video file: %s", video_path)
-            os.remove(video_path)
-            logger.debug("Video file deleted successfully")
-
-        if audio_path and os.path.exists(audio_path):
-            logger.info("Deleting temporary audio file: %s", audio_path)
-            os.remove(audio_path)
-            logger.debug("Audio file deleted successfully")
-
         return output_path
-
-    except Exception as e:
-        # Clean up temporary files even if processing fails
-        if video_path and os.path.exists(video_path):
-            try:
-                os.remove(video_path)
-                logger.debug("Cleaned up video file after error")
-            except Exception:  # pylint: disable=broad-except
-                pass
-        if audio_path and os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-                logger.debug("Cleaned up audio file after error")
-            except Exception:  # pylint: disable=broad-except
-                pass
-
-        logger.error("Pipeline failed: %s", str(e), exc_info=True)
-        raise
 
 
 def process_local_file(file_path: str, output_name: Optional[str] = None,
@@ -126,33 +121,44 @@ def process_local_file(file_path: str, output_name: Optional[str] = None,
 
         # Process each audio segment
         output_paths = []
-        for i, audio_path in enumerate(audio_paths):
-            if len(audio_paths) > 1:
-                logger.info(
-                    "Processing segment %d/%d...",
-                    i + 1,
-                    len(audio_paths))
+        temp_audio_files = []  # Track files to clean up
 
-            output_path = process_audio_file(
-                audio_path, f"{output_name}_seg{i}" if output_name and len(
-                    audio_paths) > 1 else output_name,
-                whisper_model, whisper_language)
+        # Determine if we should use parallel processing
+        use_parallel = should_use_parallel_processing(len(audio_paths))
 
-            output_paths.append(output_path)
+        if use_parallel:
+            logger.info(
+                "Processing %d segments in parallel...",
+                len(audio_paths))
+            output_paths = _process_segments_parallel(
+                audio_paths, output_name, whisper_model, whisper_language)
+        else:
+            logger.info(
+                "Processing %d segments sequentially...",
+                len(audio_paths))
+            for i, audio_path in enumerate(audio_paths):
+                if len(audio_paths) > 1:
+                    logger.info(
+                        "Processing segment %d/%d...",
+                        i + 1,
+                        len(audio_paths))
 
-            # Clean up temporary audio file if it was extracted from video
-            if os.path.exists(audio_path) and (
-                    ext not in SUPPORTED_AUDIO_EXTENSIONS or 'segment' in audio_path):
-                logger.info("Deleting temporary audio file: %s", audio_path)
-                try:
-                    os.remove(audio_path)
-                    logger.debug("Audio file deleted successfully")
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                output_path = process_audio_file(
+                    audio_path, f"{output_name}_seg{i}" if output_name and len(
+                        audio_paths) > 1 else output_name,
+                    whisper_model, whisper_language)
 
-        # If multiple segments, return the first output path
-        # TODO: Could combine segments into one file
-        return output_paths[0]
+                output_paths.append(output_path)
+
+        # Track temporary files for cleanup
+        for audio_path in audio_paths:
+            if ext not in SUPPORTED_AUDIO_EXTENSIONS or 'segment' in audio_path:
+                temp_audio_files.append(audio_path)
+
+        # Use context manager for guaranteed cleanup of temporary files
+        with managed_file_cleanup(*temp_audio_files):
+            # If multiple segments, return the first output path
+            return output_paths[0]
 
     except Exception as e:
         logger.error("Pipeline failed: %s", str(e), exc_info=True)
@@ -203,6 +209,162 @@ def process_batch_urls(urls: List[str], output_dir: str = OUTPUT_DIR,  # pylint:
     logger.info("Batch processing complete: %d successful, %d failed",
                 successful_count, failed_count)
 
+    return output_paths
+
+
+def _process_batch_urls_parallel(
+        urls: List[str], whisper_model: str, whisper_language: str) -> List[str]:
+    """
+    Process multiple Bilibili URLs in parallel.
+    """
+    if not urls:
+        return []
+
+    # Use limited workers for batch processing to avoid overwhelming system
+    max_workers = min(len(urls), MAX_BATCH_WORKERS)
+
+    logger.info(
+        "Processing %d URLs in parallel with %d workers",
+        len(urls),
+        max_workers)
+
+    def process_single_url(args):
+        """Process a single URL."""
+        i, url = args
+        try:
+            logger.info(
+                "Starting parallel processing of URL %d/%d: %s",
+                i + 1,
+                len(urls),
+                url)
+            start_time = time.time()
+
+            output_path = process_bilibili_url(
+                url, whisper_model=whisper_model, whisper_language=whisper_language)
+
+            elapsed = time.time() - start_time
+            logger.info(
+                "✓ Completed URL %d/%d in %.2f seconds",
+                i + 1,
+                len(urls),
+                elapsed)
+
+            return output_path
+        except Exception as e:
+            logger.error(
+                "✗ Failed to process URL %d/%d: %s",
+                i + 1,
+                len(urls),
+                str(e))
+            raise
+
+    # Process URLs in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_index = {
+            executor.submit(process_single_url, (i, url)): i
+            for i, url in enumerate(urls)
+        }
+
+        # Collect results
+        output_paths = []
+        successful_count = 0
+        failed_count = 0
+
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                output_path = future.result()
+                output_paths.append(output_path)
+                successful_count += 1
+            except Exception as e:  # pylint: disable=broad-except
+                failed_count += 1
+                logger.error("URL %d failed: %s", index + 1, str(e))
+                # Continue processing other URLs
+
+    logger.info(
+        "Parallel batch processing complete: %d successful, %d failed",
+        successful_count,
+        failed_count)
+    return output_paths
+
+
+def _process_batch_files_parallel(
+        file_paths: List[str], whisper_model: str, whisper_language: str) -> List[str]:
+    """
+    Process multiple local files in parallel.
+    """
+    if not file_paths:
+        return []
+
+    # Use limited workers for batch processing to avoid overwhelming system
+    max_workers = min(len(file_paths), MAX_BATCH_WORKERS)
+
+    logger.info(
+        "Processing %d files in parallel with %d workers",
+        len(file_paths),
+        max_workers)
+
+    def process_single_file(args):
+        """Process a single file."""
+        i, file_path = args
+        try:
+            logger.info(
+                "Starting parallel processing of file %d/%d: %s",
+                i + 1,
+                len(file_paths),
+                file_path)
+            start_time = time.time()
+
+            output_path = process_local_file(
+                file_path,
+                whisper_model=whisper_model,
+                whisper_language=whisper_language)
+
+            elapsed = time.time() - start_time
+            logger.info(
+                "✓ Completed file %d/%d in %.2f seconds",
+                i + 1,
+                len(file_paths),
+                elapsed)
+
+            return output_path
+        except Exception as e:
+            logger.error(
+                "✗ Failed to process file %d/%d: %s",
+                i + 1,
+                len(file_paths),
+                str(e))
+            raise
+
+    # Process files in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_index = {
+            executor.submit(process_single_file, (i, file_path)): i
+            for i, file_path in enumerate(file_paths)
+        }
+
+        # Collect results
+        output_paths = []
+        successful_count = 0
+        failed_count = 0
+
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                output_path = future.result()
+                output_paths.append(output_path)
+                successful_count += 1
+            except Exception as e:  # pylint: disable=broad-except
+                failed_count += 1
+                logger.error("File %d failed: %s", index + 1, str(e))
+                # Continue processing other files
+
+    logger.info(
+        "Parallel batch processing complete: %d successful, %d failed",
+        successful_count,
+        failed_count)
     return output_paths
 
 
@@ -257,6 +419,80 @@ def process_batch_files(file_paths: List[str], output_dir: str = OUTPUT_DIR,  # 
 
     logger.info("Batch processing complete: %d successful, %d failed",
                 successful_count, failed_count)
+
+    return output_paths
+
+
+def _process_segments_parallel(audio_paths: List[str], output_name: Optional[str],
+                               whisper_model: str, whisper_language: str) -> List[str]:
+    """
+    Process multiple audio segments in parallel.
+
+    Args:
+        audio_paths: List of audio file paths to process
+        output_name: Base name for output files
+        whisper_model: Whisper model to use
+        whisper_language: Language for Whisper
+
+    Returns:
+        List of output file paths
+    """
+    if not audio_paths:
+        return []
+
+    # Calculate optimal number of workers
+    max_workers = get_optimal_workers(len(audio_paths))
+
+    logger.info(
+        "Using %d parallel workers for %d segments",
+        max_workers,
+        len(audio_paths))
+
+    def process_single_segment(args):
+        """Process a single audio segment."""
+        i, audio_path = args
+        segment_name = f"{output_name}_seg{i}" if output_name and len(
+            audio_paths) > 1 else output_name
+
+        try:
+            logger.info(
+                "Starting parallel processing of segment %d/%d",
+                i + 1,
+                len(audio_paths))
+            start_time = time.time()
+
+            output_path = process_audio_file(
+                audio_path, segment_name, whisper_model, whisper_language)
+
+            elapsed = time.time() - start_time
+            logger.info(
+                "Completed segment %d/%d in %.2f seconds",
+                i + 1,
+                len(audio_paths),
+                elapsed)
+
+            return output_path
+        except Exception as e:
+            logger.error("Failed to process segment %d: %s", i + 1, str(e))
+            raise
+
+    # Process segments in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_index = {
+            executor.submit(process_single_segment, (i, audio_path)): i
+            for i, audio_path in enumerate(audio_paths)
+        }
+
+        # Collect results in order
+        output_paths = [None] * len(audio_paths)
+        for future in concurrent.futures.as_completed(future_to_index):
+            index = future_to_index[future]
+            try:
+                output_paths[index] = future.result()
+            except Exception as e:
+                logger.error("Segment %d failed: %s", index + 1, str(e))
+                raise
 
     return output_paths
 
@@ -318,31 +554,22 @@ def process_audio_file(audio_path: str, output_name: Optional[str] = None,
 @click.option('--whisper-language', default=WHISPER_LANGUAGE,
               help='Language code for Whisper (e.g., zh, en, ja)')
 @click.option('--split-duration', type=int,
-              help='Split audio into segments (seconds). Default: %d (1 hour) for videos longer than 2 hours') % DEFAULT_SPLIT_THRESHOLD_CLI
+              help=f'Split audio into segments (seconds). '
+              f'Default: {DEFAULT_SPLIT_THRESHOLD_CLI} (1 hour) '
+              f'for videos longer than 2 hours')
+@click.option('--parallel/--no-parallel', default=True,
+              help='Enable parallel processing for multiple segments/files')
+@click.option('--max-workers', type=int, default=None,
+              help='Maximum number of parallel workers (default: auto-detect)')
 def main(input_source: Optional[str], is_file: bool, batch_file: Optional[str],
          output_dir: str, whisper_model: str, whisper_language: str,
-         split_duration: Optional[int]) -> None:
+         split_duration: Optional[int], parallel: bool, max_workers: Optional[int]) -> None:  # pylint: disable=unused-argument
     """
     Transcribe Bilibili live recordings with speaker diarization.
 
-    \b
     Examples:
-        # Single URL
         python main.py https://www.bilibili.com/video/BVxxxxx
-
-        # Single file
         python main.py --file video.mp4
-
-        # File with automatic splitting for videos > 2 hours
-        python main.py --file long_video.mp4
-
-        # Manually set split threshold (split if > 1 hour)
-        python main.py --file video.mp4 --split-duration 3600
-
-        # Batch processing from file
-        python main.py --batch urls.txt
-
-        # Batch processing with model selection
         python main.py --batch urls.txt --model large
     """
     # Update output directory if specified

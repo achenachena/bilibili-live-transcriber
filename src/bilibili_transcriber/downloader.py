@@ -8,6 +8,12 @@ from typing import Any, Dict, Optional
 
 import yt_dlp
 
+from .config import (
+    DOWNLOAD_FORMAT_AUDIO_OPTIMIZED,
+    DOWNLOAD_FORMAT_FALLBACK,
+    DOWNLOAD_MERGE_FORMAT
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,14 +28,18 @@ def download_video(url: str, output_dir: str = "videos") -> str:
         os.makedirs(output_dir, exist_ok=True)
 
     logger.info("Starting download from: %s", url)
+    logger.info(
+        "Using audio-optimized format: %s",
+        DOWNLOAD_FORMAT_AUDIO_OPTIMIZED)
 
+    # Try audio-optimized format first
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'format': DOWNLOAD_FORMAT_AUDIO_OPTIMIZED,
         'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
         'quiet': False,
         'no_warnings': False,
         'extract_flat': False,
-        'merge_output_format': 'mp4',
+        'merge_output_format': DOWNLOAD_MERGE_FORMAT,
     }
 
     try:
@@ -69,9 +79,51 @@ def download_video(url: str, output_dir: str = "videos") -> str:
 
                 return filename
 
-    except Exception as e:
-        logger.error("Download failed: %s", str(e), exc_info=True)
-        raise
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning("Audio-optimized download failed: %s", str(e))
+        logger.info("Trying fallback format: %s", DOWNLOAD_FORMAT_FALLBACK)
+
+        # Fallback to standard format
+        ydl_opts_fallback = {
+            'format': DOWNLOAD_FORMAT_FALLBACK,
+            'outtmpl': os.path.join(output_dir, '%(title)s.%(ext)s'),
+            'quiet': False,
+            'no_warnings': False,
+            'extract_flat': False,
+            'merge_output_format': DOWNLOAD_MERGE_FORMAT,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                info = ydl.extract_info(url, download=True)
+
+                if isinstance(info, dict) and info.get('_type') == 'playlist':
+                    downloaded_files = _get_recent_files(output_dir)
+                    if downloaded_files:
+                        filename = downloaded_files[0]
+                        logger.info(
+                            "Fallback download successful: %s", filename)
+                        return filename
+                    else:
+                        raise FileNotFoundError(
+                            "No files downloaded from playlist") from e
+                else:
+                    filename = ydl.prepare_filename(info)
+                    logger.info("Fallback download successful: %s", filename)
+
+                    if not os.path.exists(filename):
+                        filename = _find_downloaded_file(filename)
+                        if not filename:
+                            raise FileNotFoundError(
+                                f"Downloaded file not found: {filename}") from e
+
+                    return filename
+
+        except Exception as fallback_error:
+            logger.error("Both audio-optimized and fallback downloads failed")
+            logger.error("Audio-optimized error: %s", str(e))
+            logger.error("Fallback error: %s", str(fallback_error))
+            raise
 
 
 def _get_recent_files(directory: str) -> list[str]:
