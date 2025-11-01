@@ -43,7 +43,7 @@ try:
 
         @dataclass
         class AudioMetaData:  # type: ignore
-            """Workaround for deprecated AudioMetaData in torchaudio 2.9.0"""
+            """Workaround for deprecated torchaudio.AudioMetaData."""
             num_frames: int
             num_channels: int
             sample_rate: int
@@ -55,7 +55,7 @@ try:
     if torchaudio is not None and not hasattr(torchaudio, 'info'):
         # type: ignore  # pylint: disable=unused-argument
         def _torchaudio_info(uri, backend=None):
-            """Workaround for missing torchaudio.info in nightly builds"""
+            """Workaround for missing torchaudio.info."""
             import soundfile as sf  # pylint: disable=import-outside-toplevel
             info = sf.info(uri)
 
@@ -83,9 +83,7 @@ logger = logging.getLogger(__name__)
 def diarize_audio(audio_path: str, model_name: str = DIARIZATION_MODEL,  # pylint: disable=unused-argument
                   min_speakers: Optional[int] = None,
                   max_speakers: Optional[int] = None) -> List[Tuple[float, float, str]]:
-    """
-    Perform speaker diarization on an audio file.
-    """
+    """Perform speaker diarization and return (start, end, speaker) tuples."""
     if not audio_path:
         raise ValueError("Audio path cannot be empty")
 

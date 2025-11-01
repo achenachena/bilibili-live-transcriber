@@ -14,9 +14,7 @@ def merge_results(diarization_segments: List[Tuple[float, float, str]],
                   transcription_segments: List[Tuple[float, float, str]],
                   min_speaker_duration: float = MIN_SPEAKER_DURATION,
                   min_silence_duration: float = MIN_SILENCE_DURATION) -> List[Tuple[float, float, str, str]]:
-    """
-    Merge diarization and transcription segments.
-    """
+    """Merge diarization and transcription segments."""
     if not diarization_segments:
         logger.warning("No diarization segments provided")
         return []
@@ -46,11 +44,7 @@ def merge_results(diarization_segments: List[Tuple[float, float, str]],
 
 def _find_speaker_for_time(diarization_segments: List[Tuple[float, float, str]],
                            start_time: float, end_time: float) -> Optional[str]:
-    """
-    Find which speaker is active during a given time range.
-
-    Internal helper function.
-    """
+    """Return speaker active during a given time range (or None)."""
     overlaps = []
 
     for diar_start, diar_end, speaker in diarization_segments:
@@ -75,11 +69,7 @@ def _find_speaker_for_time(diarization_segments: List[Tuple[float, float, str]],
 def _group_consecutive_segments(segments: List[Tuple[float, float, str, str]],
                                 min_speaker_duration: float,
                                 min_silence_duration: float) -> List[Tuple[float, float, str, str]]:
-    """
-    Group consecutive segments from the same speaker.
-
-    Internal helper function.
-    """
+    """Group consecutive segments from the same speaker."""
     if not segments:
         return segments
 

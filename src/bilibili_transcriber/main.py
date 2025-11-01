@@ -30,12 +30,7 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def managed_file_cleanup(*file_paths: str) -> Generator[List[str], None, None]:
-    """
-    Context manager for guaranteed file cleanup.
-
-    Ensures all specified files are deleted when exiting the context,
-    regardless of success or failure.
-    """
+    """Context manager that deletes specified files on exit."""
     try:
         yield list(file_paths)
     finally:
@@ -54,9 +49,7 @@ def managed_file_cleanup(*file_paths: str) -> Generator[List[str], None, None]:
 def process_bilibili_url(url: str, output_name: Optional[str] = None,
                          whisper_model: str = WHISPER_MODEL,
                          whisper_language: str = WHISPER_LANGUAGE) -> str:
-    """
-    Process a Bilibili video URL through the full pipeline.
-    """
+    """Process a Bilibili URL through the full pipeline."""
     if not url:
         raise ValueError("URL cannot be empty")
 
@@ -87,11 +80,7 @@ def process_local_file(file_path: str, output_name: Optional[str] = None,
                        whisper_model: str = WHISPER_MODEL,
                        whisper_language: str = WHISPER_LANGUAGE,
                        split_duration: Optional[int] = None) -> str:
-    """
-    Process a local video/audio file through the full pipeline.
-
-    Automatically splits videos longer than split_duration into segments.
-    """
+    """Process a local file through the pipeline (splits long videos)."""
     if not file_path:
         raise ValueError("File path cannot be empty")
 
@@ -168,9 +157,7 @@ def process_local_file(file_path: str, output_name: Optional[str] = None,
 def process_batch_urls(urls: List[str], output_dir: str = OUTPUT_DIR,  # pylint: disable=unused-argument
                        whisper_model: str = WHISPER_MODEL,
                        whisper_language: str = WHISPER_LANGUAGE) -> List[str]:
-    """
-    Process multiple Bilibili URLs in batch.
-    """
+    """Process multiple Bilibili URLs in batch."""
     if not urls:
         raise ValueError("URLs list cannot be empty")
 
@@ -214,9 +201,7 @@ def process_batch_urls(urls: List[str], output_dir: str = OUTPUT_DIR,  # pylint:
 
 def _process_batch_urls_parallel(
         urls: List[str], whisper_model: str, whisper_language: str) -> List[str]:
-    """
-    Process multiple Bilibili URLs in parallel.
-    """
+    """Process multiple Bilibili URLs in parallel."""
     if not urls:
         return []
 
@@ -291,9 +276,7 @@ def _process_batch_urls_parallel(
 
 def _process_batch_files_parallel(
         file_paths: List[str], whisper_model: str, whisper_language: str) -> List[str]:
-    """
-    Process multiple local files in parallel.
-    """
+    """Process multiple local files in parallel."""
     if not file_paths:
         return []
 
@@ -371,9 +354,7 @@ def _process_batch_files_parallel(
 def process_batch_files(file_paths: List[str], output_dir: str = OUTPUT_DIR,  # pylint: disable=unused-argument
                         whisper_model: str = WHISPER_MODEL,
                         whisper_language: str = WHISPER_LANGUAGE) -> List[str]:
-    """
-    Process multiple local files in batch.
-    """
+    """Process multiple local files in batch."""
     if not file_paths:
         raise ValueError("File paths list cannot be empty")
 
@@ -425,18 +406,7 @@ def process_batch_files(file_paths: List[str], output_dir: str = OUTPUT_DIR,  # 
 
 def _process_segments_parallel(audio_paths: List[str], output_name: Optional[str],
                                whisper_model: str, whisper_language: str) -> List[str]:
-    """
-    Process multiple audio segments in parallel.
-
-    Args:
-        audio_paths: List of audio file paths to process
-        output_name: Base name for output files
-        whisper_model: Whisper model to use
-        whisper_language: Language for Whisper
-
-    Returns:
-        List of output file paths
-    """
+    """Process multiple audio segments in parallel and return output paths."""
     if not audio_paths:
         return []
 
@@ -476,8 +446,8 @@ def _process_segments_parallel(audio_paths: List[str], output_name: Optional[str
             logger.error("Failed to process segment %d: %s", i + 1, str(e))
             raise
 
-    # Process segments in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # Process segments in parallel using processes to bypass GIL
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_index = {
             executor.submit(process_single_segment, (i, audio_path)): i
@@ -506,19 +476,33 @@ def process_audio_file(audio_path: str, output_name: Optional[str] = None,
     if not audio_path:
         raise ValueError("Audio path cannot be empty")
 
-    # Step 3: Speaker diarization
+    # Step 3 & 4: Perform diarization and transcription in parallel
     logger.info(
-        "Step %d/5: Performing speaker diarization...",
+        "Steps %d-4/5: Performing speaker diarization and transcription in parallel...",
         PIPELINE_STEPS["DIARIZE"])
-    diarization_segments = diarizer.diarize_audio(audio_path)
 
-    # Step 4: Transcription
-    logger.info(
-        "Step %d/5: Transcribing audio...",
-        PIPELINE_STEPS["TRANSCRIBE"])
-    transcription_segments = transcriber.get_text_with_timestamps(
-        audio_path, whisper_model, whisper_language
-    )
+    diarization_segments = None
+    transcription_segments = None
+
+    def run_diarization():
+        """Run speaker diarization."""
+        nonlocal diarization_segments
+        diarization_segments = diarizer.diarize_audio(audio_path)
+
+    def run_transcription():
+        """Run transcription."""
+        nonlocal transcription_segments
+        transcription_segments = transcriber.get_text_with_timestamps(
+            audio_path, whisper_model, whisper_language
+        )
+
+    # Run both tasks in parallel using threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(run_diarization),
+            executor.submit(run_transcription)
+        ]
+        concurrent.futures.wait(futures)
 
     # Step 5: Merge and save
     logger.info(
@@ -564,14 +548,7 @@ def process_audio_file(audio_path: str, output_name: Optional[str] = None,
 def main(input_source: Optional[str], is_file: bool, batch_file: Optional[str],
          output_dir: str, whisper_model: str, whisper_language: str,
          split_duration: Optional[int], parallel: bool, max_workers: Optional[int]) -> None:  # pylint: disable=unused-argument
-    """
-    Transcribe Bilibili live recordings with speaker diarization.
-
-    Examples:
-        python main.py https://www.bilibili.com/video/BVxxxxx
-        python main.py --file video.mp4
-        python main.py --batch urls.txt --model large
-    """
+    """CLI entry: transcribe Bilibili recordings with diarization."""
     # Update output directory if specified
     if output_dir != OUTPUT_DIR:
         if not os.path.exists(output_dir):

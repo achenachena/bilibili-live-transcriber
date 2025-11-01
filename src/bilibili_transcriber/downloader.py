@@ -18,9 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def download_video(url: str, output_dir: str = "videos") -> str:
-    """
-    Download a video from the given Bilibili URL.
-    """
+    """Download a video from a Bilibili URL and return the file path."""
     if not url:
         raise ValueError("URL cannot be empty")
 
@@ -127,11 +125,7 @@ def download_video(url: str, output_dir: str = "videos") -> str:
 
 
 def _get_recent_files(directory: str) -> list[str]:
-    """
-    Get the most recently downloaded files from a directory.
-
-    Internal helper for playlist handling.
-    """
+    """Return most recent downloaded video files in a directory."""
     if not os.path.exists(directory):
         return []
 
@@ -148,11 +142,7 @@ def _get_recent_files(directory: str) -> list[str]:
 
 
 def _find_downloaded_file(filename: str) -> Optional[str]:
-    """
-    Find the actual downloaded file by trying different extensions.
-
-    Internal helper function.
-    """
+    """Return existing file by trying common video extensions for a base name."""
     base_name = os.path.splitext(filename)[0]
     for ext in ['.mp4', '.mkv', '.webm', '.flv']:
         candidate = base_name + ext
@@ -162,9 +152,7 @@ def _find_downloaded_file(filename: str) -> Optional[str]:
 
 
 def get_video_info(url: str) -> Dict[str, Any]:
-    """
-    Get video information without downloading.
-    """
+    """Return video information without downloading."""
     if not url:
         raise ValueError("URL cannot be empty")
 

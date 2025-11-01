@@ -13,10 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def _add_commas(text: str, language: str = 'zh') -> str:
-    """
-    Add commas for natural pauses and breaks in the text.
-    Simple approach: replace spaces with commas in Chinese, but avoid conflicts with other punctuation.
-    """
+    """Insert commas to improve readability based on language."""
     if language == 'zh':
         # First, replace spaces with commas
         result = text.replace(' ', '，')
@@ -45,11 +42,7 @@ def _add_commas(text: str, language: str = 'zh') -> str:
 
 
 def restore_punctuation(text: str, language: str = 'zh') -> str:
-    """
-    Restore punctuation to transcribed text using rule-based approach.
-
-    Avoids Whisper's initial_prompt which can cause repetitive output issues.
-    """
+    """Restore punctuation in transcribed text using simple rules."""
     if not text or not text.strip():
         return text
 
@@ -128,9 +121,7 @@ def convert_to_simplified(text: str) -> str:
 
 
 def format_time(seconds: float) -> str:
-    """
-    Format time in seconds to [HH:MM:SS] format.
-    """
+    """Return time string [HH:MM:SS] for given seconds."""
     td = timedelta(seconds=float(seconds))
     hours, remainder = divmod(td.seconds, SECONDS_PER_HOUR)
     minutes, secs = divmod(remainder, SECONDS_PER_MINUTE)
@@ -138,9 +129,7 @@ def format_time(seconds: float) -> str:
 
 
 def format_segments(segments: List[Tuple[float, float, str, str]]) -> str:
-    """
-    Format merged segments into readable Markdown text.
-    """
+    """Format merged segments as Markdown text."""
     lines = ["# Transcription", ""]
 
     for start, _end, speaker, text in segments:
@@ -159,9 +148,7 @@ def format_segments(segments: List[Tuple[float, float, str, str]]) -> str:
 
 def save_transcription(segments: List[Tuple[float, float, str, str]],
                        output_filename: str, output_dir: str = "output") -> str:
-    """
-    Save formatted segments to a file.
-    """
+    """Save formatted segments to a file and return the path."""
     if not output_dir:
         raise ValueError("Output directory cannot be empty")
 
@@ -190,9 +177,7 @@ def save_transcription(segments: List[Tuple[float, float, str, str]],
 
 
 def generate_filename(source_name: str, extension: str = ".md") -> str:
-    """
-    Generate an output filename based on source.
-    """
+    """Generate an output filename based on the source name."""
     if not source_name:
         return f"transcript{extension}"
 

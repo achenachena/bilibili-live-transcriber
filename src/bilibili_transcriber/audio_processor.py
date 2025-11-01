@@ -42,13 +42,15 @@ def extract_audio(video_path: str, output_name: Optional[str] = None,
 
     output_path = os.path.join(audio_dir, output_name)
 
-    # Use ffmpeg to extract audio
+    # Use ffmpeg to extract audio with hardware acceleration on macOS
     command = [
         'ffmpeg',
+        '-hwaccel', 'auto',  # Use hardware acceleration if available
         '-i', video_path,
         '-ar', str(sample_rate),
         '-ac', str(AUDIO_CHANNELS),  # Mono
         '-acodec', AUDIO_CODEC,  # PCM 16-bit
+        '-threads', '0',  # Use all available threads
         '-y',  # Overwrite output file
         output_path
     ]
@@ -182,6 +184,7 @@ def split_audio(audio_path: str, segment_duration: int = DEFAULT_SEGMENT_DURATIO
 
     command = [
         'ffmpeg',
+        '-hwaccel', 'auto',  # Use hardware acceleration if available
         '-i', audio_path,
         '-f', 'segment',
         '-segment_time', str(segment_duration),
@@ -189,6 +192,7 @@ def split_audio(audio_path: str, segment_duration: int = DEFAULT_SEGMENT_DURATIO
         '-ac', str(AUDIO_CHANNELS),  # Mono
         '-acodec', AUDIO_CODEC,  # PCM 16-bit
         '-reset_timestamps', str(AUDIO_RESET_TIMESTAMPS),
+        '-threads', '0',  # Use all available threads
         '-y',  # Overwrite output file
         output_pattern
     ]
