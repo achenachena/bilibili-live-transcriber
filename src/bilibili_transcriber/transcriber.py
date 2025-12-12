@@ -154,6 +154,7 @@ def transcribe_audio(audio_path: str, model_size: str = "base",
         if _transcription_looks_like_gibberish(result):
             logger.warning(
                 "Transcription appears to be gibberish; retrying with safer settings (fp16=False, beam search, temperature=0.2)")
+            retry_success = False
             try:
                 result_retry = model.transcribe(
                     audio_path,
@@ -173,47 +174,65 @@ def transcribe_audio(audio_path: str, model_size: str = "base",
                 if not _transcription_looks_like_gibberish(result_retry):
                     logger.info("Retry improved quality; using retried result")
                     return result_retry
-                logger.warning(
-                    "Retry still looks like gibberish; keeping original result")
+                logger.warning("Retry still looks like gibberish")
+                retry_success = False
             except Exception as retry_e:  # pylint: disable=broad-except
                 logger.warning("Safe retry failed: %s", str(retry_e))
-                # As a last resort, try CPU decoding to avoid MPS instability
-                try:
-                    logger.warning(
-                        "Retrying on CPU due to potential MPS instability...")
+                # Check if it's a NaN/inf error (MPS instability)
+                error_str = str(retry_e).lower()
+                if "nan" in error_str or "inf" in error_str:
+                    logger.error(
+                        "MPS/GPU instability detected (NaN/inf errors). "
+                        "Attempting CPU fallback...")
+                    # As a last resort, try CPU decoding to avoid MPS
+                    # instability
                     try:
-                        original_device = next(
-                            # type: ignore[attr-defined]
-                            model.parameters()).device
-                    except Exception:  # pylint: disable=broad-except
-                        original_device = None
-                    model.to("cpu")
-                    result_cpu = model.transcribe(
-                        audio_path,
-                        language=language or "zh",
-                        verbose=verbose,
-                        word_timestamps=False,
-                        condition_on_previous_text=False,
-                        temperature=0.2,
-                        compression_ratio_threshold=WHISPER_COMPRESSION_RATIO_THRESHOLD,
-                        logprob_threshold=WHISPER_LOGPROB_THRESHOLD,
-                        no_speech_threshold=WHISPER_NO_SPEECH_THRESHOLD,
-                        fp16=False,
-                        beam_size=max(WHISPER_BEAM_SIZE, 5),
-                        best_of=max(WHISPER_BEST_OF, 3),
-                        suppress_tokens=[-1]
-                    )
-                    if original_device is not None and str(
-                            original_device).startswith("mps"):
-                        model.to("mps")
-                    if not _transcription_looks_like_gibberish(result_cpu):
-                        logger.info(
-                            "CPU retry improved quality; using CPU result")
-                        return result_cpu
-                    logger.warning(
-                        "CPU retry still looks like gibberish; keeping original result")
-                except Exception as cpu_retry_e:  # pylint: disable=broad-except
-                    logger.warning("CPU retry failed: %s", str(cpu_retry_e))
+                        try:
+                            original_device = next(
+                                # type: ignore[attr-defined]
+                                model.parameters()).device
+                        except Exception:  # pylint: disable=broad-except
+                            original_device = None
+                        model.to("cpu")
+                        result_cpu = model.transcribe(
+                            audio_path,
+                            language=language or "zh",
+                            verbose=verbose,
+                            word_timestamps=False,
+                            condition_on_previous_text=False,
+                            temperature=0.2,
+                            compression_ratio_threshold=WHISPER_COMPRESSION_RATIO_THRESHOLD,
+                            logprob_threshold=WHISPER_LOGPROB_THRESHOLD,
+                            no_speech_threshold=WHISPER_NO_SPEECH_THRESHOLD,
+                            fp16=False,
+                            beam_size=max(WHISPER_BEAM_SIZE, 5),
+                            best_of=max(WHISPER_BEST_OF, 3),
+                            suppress_tokens=[-1]
+                        )
+                        if original_device is not None and str(
+                                original_device).startswith("mps"):
+                            model.to("mps")
+                        if not _transcription_looks_like_gibberish(result_cpu):
+                            logger.info(
+                                "CPU retry improved quality; using CPU result")
+                            return result_cpu
+                        logger.error(
+                            "CPU retry still produces gibberish. "
+                            "Transcription quality is insufficient.")
+                        retry_success = False
+                    except Exception as cpu_retry_e:  # pylint: disable=broad-except
+                        logger.error("CPU retry failed: %s", str(cpu_retry_e))
+                        retry_success = False
+
+            # If all retries failed or produced gibberish, raise error instead
+            # of returning garbage
+            if not retry_success:
+                raise RuntimeError(
+                    "Transcription failed: All attempts produced gibberish or "
+                    "encountered errors. This may indicate:\n"
+                    "1. Audio file is corrupted or contains no speech\n"
+                    "2. GPU instability (MPS/CUDA) - try disabling GPU\n"
+                    "3. Model compatibility issue - try a different model size")
 
         return result
 
@@ -381,29 +400,32 @@ def _filter_repetitive_segments(
     # Safety check: if we filtered everything, something is wrong
     if len(filtered) == 0 and total_segments > 0:
         logger.warning(
-            "All segments were filtered! This may indicate overly aggressive "
-            "filtering. Keeping original segments as fallback.")
-        # Prefer segments with meaningful text (letters/CJK), otherwise fall
-        # back to first few
+            "All segments were filtered as gibberish! This indicates the "
+            "transcription failed. Checking for any meaningful content...")
+        # Only keep segments with meaningful text (letters/CJK), never keep
+        # gibberish as fallback
         meaningful: List[Tuple[float, float, str]] = []
         for start, end, text in segments:
             if (len(text.strip()) >= MIN_SEGMENT_LENGTH and
-                    _has_meaningful_text(text)):
+                    _has_meaningful_text(text) and
+                    not _looks_like_gibberish(text)):  # Double-check
                 meaningful.append((start, end, text))
 
         if meaningful:
-            # Keep up to 200 meaningful segments to avoid empty outputs
-            filtered.extend(meaningful[:200])
+            logger.info(
+                "Found %d meaningful segments out of %d total. "
+                "Using only meaningful segments.",
+                len(meaningful), total_segments)
+            filtered.extend(meaningful)
         else:
-            # As a last resort, keep the first 50 non-empty segments regardless
-            # of content
-            fallback = []
-            for start, end, text in segments:
-                if text.strip():
-                    fallback.append((start, end, text))
-                if len(fallback) >= 50:
-                    break
-            filtered.extend(fallback)
+            # Do NOT fallback to gibberish - better to have empty output
+            # than garbage
+            logger.error(
+                "No meaningful segments found after filtering. "
+                "Transcription appears to have completely failed. "
+                "Returning empty result rather than gibberish.")
+            # Return empty list - better than outputting garbage
+            return []
 
     return filtered
 
@@ -420,17 +442,17 @@ def _looks_like_gibberish(text: str) -> bool:
     # Consider common punctuation and symbols likely to appear in
     # hallucinations
     punctuation_symbols = set(
-        '!,.:;?%~`^|/\\-_—"\'“”‘’·…<>《》()[]{}#@&*+=，。！？、；：（）【】％')
+        '!,.:;?%~`^|/\\-_—"\'""''·…<>《》()[]{}#@&*+=，。！？、；：（）【】％')
 
     total = len(stripped)
     punct_count = sum(1 for ch in stripped if ch in punctuation_symbols)
 
-    # If more than 60% are punctuation/symbols, treat as gibberish
-    if total > 0 and (punct_count / total) >= 0.6:
+    # If more than 50% are punctuation/symbols, treat as gibberish (stricter)
+    if total > 0 and (punct_count / total) >= 0.5:
         return True
 
     # If there is a very long run of the same punctuation, also treat as
-    # gibberish
+    # gibberish (check for runs of 5+ identical punctuation chars)
     max_run = 1
     current_run = 1
     for i in range(1, len(stripped)):
@@ -441,7 +463,20 @@ def _looks_like_gibberish(text: str) -> bool:
                 max_run = current_run
         else:
             current_run = 1
-    if max_run >= 8:
+    if max_run >= 5:  # Lower threshold: 5+ repeated punctuation = gibberish
+        return True
+
+    # Check for patterns like "!!!!%. " (repeated punctuation + percentage)
+    # This catches the specific case we saw: lots of ! followed by %
+    if total > 20:  # Only check on longer strings
+        # Count distinct punctuation types
+        punct_types = set(ch for ch in stripped if ch in punctuation_symbols)
+        if len(punct_types) <= 2 and punct_count >= total * 0.7:
+            # If mostly just 1-2 types of punctuation, it's likely gibberish
+            return True
+
+    # Check if text has no meaningful characters (letters or CJK)
+    if not _has_meaningful_text(stripped):
         return True
 
     return False

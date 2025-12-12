@@ -1,5 +1,5 @@
 """
-Main CLI interface for Bilibili Live Transcriber.
+Main CLI interface for video transcriber (Bilibili, YouTube, etc.).
 Uses functional programming approach.
 """
 import logging
@@ -14,6 +14,7 @@ import click
 
 from . import (audio_processor, diarizer, downloader, formatter, merger,
                transcriber)
+from .downloader import detect_video_platform
 from .config import (AUDIO_DIR, OUTPUT_DIR, VIDEO_DIR, WHISPER_LANGUAGE,
                      WHISPER_MODEL, PIPELINE_STEPS, DEFAULT_SPLIT_THRESHOLD,
                      DEFAULT_SPLIT_THRESHOLD_CLI, DEFAULT_SEGMENT_DURATION,
@@ -46,14 +47,15 @@ def managed_file_cleanup(*file_paths: str) -> Generator[List[str], None, None]:
                         "Failed to delete file %s: %s", file_path, e)
 
 
-def process_bilibili_url(url: str, output_name: Optional[str] = None,
-                         whisper_model: str = WHISPER_MODEL,
-                         whisper_language: str = WHISPER_LANGUAGE) -> str:
-    """Process a Bilibili URL through the full pipeline."""
+def process_video_url(url: str, output_name: Optional[str] = None,
+                      whisper_model: str = WHISPER_MODEL,
+                      whisper_language: str = WHISPER_LANGUAGE) -> str:
+    """Process a video URL (Bilibili, YouTube, etc.) through the full pipeline."""
     if not url:
         raise ValueError("URL cannot be empty")
 
-    logger.info("Processing Bilibili URL: %s", url)
+    platform = detect_video_platform(url)
+    logger.info("Processing %s URL: %s", platform, url)
 
     # Step 1: Download video
     logger.info(
@@ -154,10 +156,51 @@ def process_local_file(file_path: str, output_name: Optional[str] = None,
         raise
 
 
+def process_batch_downloads(
+        urls: List[str], output_dir: str = VIDEO_DIR) -> List[str]:
+    """Download multiple video URLs without transcription."""
+    if not urls:
+        raise ValueError("URLs list cannot be empty")
+
+    logger.info("Starting batch download of %d URLs", len(urls))
+
+    downloaded_paths = []
+    successful_count = 0
+    failed_count = 0
+
+    for i, url in enumerate(urls, 1):
+        try:
+            logger.info("Downloading URL %d/%d: %s", i, len(urls), url)
+
+            # Download video only
+            video_path = downloader.download_full_video(url, output_dir)
+
+            downloaded_paths.append(video_path)
+            successful_count += 1
+
+            logger.info("✓ Successfully downloaded URL %d/%d", i, len(urls))
+
+        except Exception as e:  # pylint: disable=broad-except
+            failed_count += 1
+            logger.error(
+                "✗ Failed to download URL %d/%d: %s",
+                i,
+                len(urls),
+                str(e))
+
+            # Continue processing other URLs even if one fails
+            continue
+
+    logger.info("Batch download complete: %d successful, %d failed",
+                successful_count, failed_count)
+
+    return downloaded_paths
+
+
 def process_batch_urls(urls: List[str], output_dir: str = OUTPUT_DIR,  # pylint: disable=unused-argument
                        whisper_model: str = WHISPER_MODEL,
                        whisper_language: str = WHISPER_LANGUAGE) -> List[str]:
-    """Process multiple Bilibili URLs in batch."""
+    """Process multiple video URLs in batch."""
     if not urls:
         raise ValueError("URLs list cannot be empty")
 
@@ -172,7 +215,7 @@ def process_batch_urls(urls: List[str], output_dir: str = OUTPUT_DIR,  # pylint:
             logger.info("Processing URL %d/%d: %s", i, len(urls), url)
 
             # Process single URL
-            output_path = process_bilibili_url(
+            output_path = process_video_url(
                 url, whisper_model=whisper_model,
                 whisper_language=whisper_language
             )
@@ -201,7 +244,7 @@ def process_batch_urls(urls: List[str], output_dir: str = OUTPUT_DIR,  # pylint:
 
 def _process_batch_urls_parallel(
         urls: List[str], whisper_model: str, whisper_language: str) -> List[str]:
-    """Process multiple Bilibili URLs in parallel."""
+    """Process multiple video URLs in parallel."""
     if not urls:
         return []
 
@@ -224,7 +267,7 @@ def _process_batch_urls_parallel(
                 url)
             start_time = time.time()
 
-            output_path = process_bilibili_url(
+            output_path = process_video_url(
                 url, whisper_model=whisper_model, whisper_language=whisper_language)
 
             elapsed = time.time() - start_time
@@ -492,9 +535,18 @@ def process_audio_file(audio_path: str, output_name: Optional[str] = None,
     def run_transcription():
         """Run transcription."""
         nonlocal transcription_segments
-        transcription_segments = transcriber.get_text_with_timestamps(
-            audio_path, whisper_model, whisper_language
-        )
+        try:
+            transcription_segments = transcriber.get_text_with_timestamps(
+                audio_path, whisper_model, whisper_language
+            )
+            if not transcription_segments:
+                logger.warning(
+                    "Transcription returned empty results. "
+                    "This may indicate audio quality issues or transcription failure.")
+        except RuntimeError as e:
+            # Re-raise transcription failure errors
+            logger.error("Transcription failed: %s", str(e))
+            raise
 
     # Run both tasks in parallel using threads
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -545,10 +597,13 @@ def process_audio_file(audio_path: str, output_name: Optional[str] = None,
               help='Enable parallel processing for multiple segments/files')
 @click.option('--max-workers', type=int, default=None,
               help='Maximum number of parallel workers (default: auto-detect)')
+@click.option('--download-only', is_flag=True,
+              help='Only download video without transcription (URLs only)')
 def main(input_source: Optional[str], is_file: bool, batch_file: Optional[str],
          output_dir: str, whisper_model: str, whisper_language: str,
-         split_duration: Optional[int], parallel: bool, max_workers: Optional[int]) -> None:  # pylint: disable=unused-argument
-    """CLI entry: transcribe Bilibili recordings with diarization."""
+         split_duration: Optional[int], parallel: bool, max_workers: Optional[int],  # pylint: disable=unused-argument
+         download_only: bool) -> None:
+    """CLI entry: transcribe video recordings (Bilibili, YouTube, etc.) with diarization."""
     # Update output directory if specified
     if output_dir != OUTPUT_DIR:
         if not os.path.exists(output_dir):
@@ -557,7 +612,48 @@ def main(input_source: Optional[str], is_file: bool, batch_file: Optional[str],
         globals()['OUTPUT_DIR'] = output_dir
 
     try:
-        if batch_file:
+        if download_only:
+            # Download-only mode
+            if is_file:
+                click.echo(
+                    "Error: --download-only option only works with URLs, not local files.",
+                    err=True)
+                sys.exit(1)
+
+            if batch_file:
+                # Batch download mode
+                if not os.path.exists(batch_file):
+                    click.echo(
+                        f"Error: Batch file not found: {batch_file}",
+                        err=True)
+                    sys.exit(1)
+
+                # Read URLs from batch file
+                with open(batch_file, 'r', encoding='utf-8') as f:
+                    lines = [line.strip() for line in f if line.strip()]
+
+                if not lines:
+                    click.echo("Error: Batch file is empty", err=True)
+                    sys.exit(1)
+
+                click.echo(
+                    f"Downloading {
+                        len(lines)} videos from batch file...")
+                downloaded_paths = process_batch_downloads(lines, VIDEO_DIR)
+                click.echo("\n✓ Batch download complete!")
+                click.echo(
+                    f"✓ {len(downloaded_paths)} videos saved to: {VIDEO_DIR}")
+            elif input_source:
+                # Single URL download
+                video_path = downloader.download_full_video(
+                    input_source, VIDEO_DIR)
+                click.echo(f"\n✓ Video downloaded to: {video_path}")
+            else:
+                click.echo(
+                    "Error: No URL provided. Use --help for usage information.",
+                    err=True)
+                sys.exit(1)
+        elif batch_file:
             # Batch processing mode
             if not os.path.exists(batch_file):
                 click.echo(
@@ -586,8 +682,7 @@ def main(input_source: Optional[str], is_file: bool, batch_file: Optional[str],
 
             click.echo("\n✓ Batch processing complete!")
             click.echo(
-                f"✓ {
-                    len(output_paths)} transcriptions saved to: {output_dir}")
+                f"✓ {len(output_paths)} transcriptions saved to: {output_dir}")
 
         elif input_source:
             # Single item processing
@@ -596,8 +691,8 @@ def main(input_source: Optional[str], is_file: bool, batch_file: Optional[str],
                                                  whisper_language=whisper_language,
                                                  split_duration=split_duration)
             else:
-                output_path = process_bilibili_url(input_source, whisper_model=whisper_model,
-                                                   whisper_language=whisper_language)
+                output_path = process_video_url(input_source, whisper_model=whisper_model,
+                                                whisper_language=whisper_language)
 
             click.echo(f"\n✓ Transcription saved to: {output_path}")
         else:

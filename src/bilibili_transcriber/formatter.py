@@ -132,7 +132,23 @@ def format_segments(segments: List[Tuple[float, float, str, str]]) -> str:
     """Format merged segments as Markdown text."""
     lines = ["# Transcription", ""]
 
+    if not segments:
+        lines.append("**No transcription available.**")
+        lines.append("")
+        lines.append(
+            "Transcription failed or produced no valid output. "
+            "This may indicate:\n"
+            "- Audio file contains no speech\n"
+            "- Audio quality is too poor for transcription\n"
+            "- Model compatibility issues\n"
+            "- GPU instability (try disabling GPU acceleration)")
+        return "\n".join(lines)
+
     for start, _end, speaker, text in segments:
+        # Skip empty text segments
+        if not text or not text.strip():
+            continue
+
         # Convert to simplified Chinese
         simplified_text = convert_to_simplified(text)
 

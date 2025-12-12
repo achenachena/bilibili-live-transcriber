@@ -105,6 +105,8 @@ SUPPORTED_VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.webm', '.flv']
 # Audio-optimized format: best audio quality + worst video quality
 # This significantly reduces download size and time since we only need audio
 DOWNLOAD_FORMAT_AUDIO_OPTIMIZED = 'worstvideo+bestaudio/worst+bestaudio/bestaudio'
+# Full video format: best video and audio quality (for download-only mode)
+DOWNLOAD_FORMAT_FULL_VIDEO = 'bestvideo+bestaudio/best'
 # Fallback format if audio-only not available
 DOWNLOAD_FORMAT_FALLBACK = 'best[ext=mp4]/best'
 # Output format for merged files
